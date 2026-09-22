@@ -91,6 +91,17 @@ jobs:
       - name: Start service
         run: docker compose up -d
 
+      - name: Wait for API
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8000/v1/ready; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+
       - name: Smoke test
         run: make smoke
 
