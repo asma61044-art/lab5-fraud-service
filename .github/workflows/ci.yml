@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -65,6 +66,62 @@ jobs:
         with:
           name: coverage-report
           path: .coverage
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, test, image-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Pull published image
+        run: docker pull ${{ env.IMAGE }}:sha-${{ github.sha }}
+
+      - name: Run pulled image
+        run: |
+          docker run -d --name fraud-api -p 8000:8000             ${{ env.IMAGE }}:sha-${{ github.sha }}
+
+      - name: Wait for pulled image
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8000/v1/ready; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs fraud-api
+          exit 1
+
+      - name: Smoke pulled image
+        run: |
+          curl -fsS http://localhost:8000/v1/health
+          curl -fsS http://localhost:8000/v1/ready
+
+      - name: Stop pulled image
+        if: always()
+        run: docker rm -f fraud-api || true
 
   image-smoke:
     needs: [lint, test]
